@@ -19,8 +19,8 @@ class ProductProduct(models.Model):
     stock_fifo_real_time_aml_ids = fields.Many2many(
         "account.move.line", compute="_compute_inventory_value"
     )
-    stock_valuation_layer_ids = fields.Many2many(
-        "stock.valuation.layer", compute="_compute_inventory_value"
+    stock_move_valuated_ids = fields.Many2many(
+        "stock.move", compute="_compute_inventory_value"
     )
     valuation_discrepancy = fields.Float(
         compute="_compute_inventory_value",
@@ -60,101 +60,76 @@ class ProductProduct(models.Model):
     def _compute_inventory_value(self):
         self.env["account.move.line"].check_access("read")
         to_date = self.env.context.get("at_date", False)
+        # 1) ACCOUNTING VALUES (same as your module)
         accounting_values = {}
-        layer_values = {}
-        # pylint: disable=E8103
         query = """
             SELECT aml.product_id, aml.account_id,
-            sum(aml.balance), sum(quantity),
-            array_agg(aml.id)
+                sum(aml.balance), sum(quantity),
+                array_agg(aml.id)
             FROM account_move_line AS aml
             INNER JOIN account_move AS am ON am.id = aml.move_id
-            WHERE aml.product_id IN %%s
+            WHERE aml.product_id IN %s
             AND am.state = 'posted'
-            AND aml.company_id=%%s %s
-            GROUP BY aml.product_id, aml.account_id"""
-        params = (
-            tuple(
-                self._ids,
-            ),
-            self.env.company.id,
-        )
+            AND aml.company_id=%s %s
+            GROUP BY aml.product_id, aml.account_id
+        """
+        params = (tuple(self.ids), self.env.company.id)
         if to_date:
-            # pylint: disable=sql-injection
             query = query % ("AND aml.date <= %s",)
             params = params + (to_date,)
         else:
             query = query % ("",)
-        # pylint: disable=E8103
         self.env.cr.execute(query, params=params)
-        res = self.env.cr.fetchall()
-        for row in res:
+        for row in self.env.cr.fetchall():
             accounting_values[(row[0], row[1])] = (row[2], row[3], list(row[4]))
-        # pylint: disable=E8103
-        query = """
-            SELECT DISTINCT ON ("product_id") product_id, sum(quantity),
-            sum(value), array_agg(svl.id)
-            FROM   "stock_valuation_layer" AS svl
-            WHERE svl.product_id IN %%s
-            AND svl.company_id=%%s %s
-            GROUP BY product_id
-            ORDER BY "product_id" DESC NULLS LAST
-            """
-        params = (
-            tuple(
-                self._ids,
-            ),
-            self.env.company.id,
-        )
+        # 2) INVENTORY VALUES (v19: computed from stock moves)
+        # We use stock moves that impact valuation (value != 0)
+        move_query = """
+            SELECT sm.product_id,
+                sum(sm.quantity_done),
+                sum(sm.stock_valuation_amount),
+                array_agg(sm.id)
+            FROM stock_move AS sm
+            WHERE sm.product_id IN %s
+            AND sm.company_id=%s
+            AND sm.state='done'
+            AND sm.stock_valuation_amount IS NOT NULL
+            %s
+            GROUP BY sm.product_id
+        """
+        params2 = (tuple(self.ids), self.env.company.id)
         if to_date:
-            # pylint: disable=sql-injection
-            query = query % ("AND svl.create_date <= %s",)
-            params = params + (to_date,)
+            move_query = move_query % ("AND sm.date <= %s",)
+            params2 = params2 + (to_date,)
         else:
-            query = query % ("",)
-        # pylint: disable=E8103
-        self.env.cr.execute(query, params=params)
-        res = self.env.cr.fetchall()
-        aml_ids = self.env["account.move.line"]
-        for row in res:
-            layer_values[row[0]] = (row[1], row[2], list(row[3]))
+            move_query = move_query % ("",)
+        self.env.cr.execute(move_query, params=params2)
+        move_values = {row[0]: (row[1], row[2], list(row[3])) for row in self.env.cr.fetchall()}
+        StockMove = self.env["stock.move"]
         for product in self:
-            # Retrieve the values from accounting
-            # We cannot provide location-specific accounting valuation,
-            # so better, leave the data empty in that case:
+            # ACCOUNTING SIDE
             if product.valuation == "real_time":
-                valuation_account_id = (
-                    product.categ_id.property_stock_valuation_account_id.id
-                )
-                value, quantity, aml_ids = accounting_values.get(
-                    (product.id, valuation_account_id)
-                ) or (0, 0, [])
+                valuation_account_id = product.categ_id.property_stock_valuation_account_id.id
+                value, qty, aml_ids = accounting_values.get((product.id, valuation_account_id)) or (0, 0, [])
                 product.account_value = value
-                product.account_qty_at_date = quantity
-                product.stock_fifo_real_time_aml_ids = self.env[
-                    "account.move.line"
-                ].browse(aml_ids)
+                product.account_qty_at_date = qty
+                product.stock_fifo_real_time_aml_ids = self.env["account.move.line"].browse(aml_ids)
             else:
-                product.account_value = 0.0
-                product.account_qty_at_date = 0.0
+                product.account_value = 0
+                product.account_qty_at_date = 0
                 product.stock_fifo_real_time_aml_ids = []
-            # Retrieve the values from inventory
-            quantity, value, svl_ids = layer_values.get(product.id) or (0, 0, [])
-            product.stock_value = value
-            product.qty_at_date = quantity
-            product.stock_valuation_layer_ids = self.env[
-                "stock.valuation.layer"
-            ].browse(svl_ids)
+            # INVENTORY SIDE (move-based)
+            qty, val, move_ids = move_values.get(product.id, (0, 0, []))
+            product.qty_at_date = qty
+            product.stock_value = val
+            product.stock_move_valuated_ids = StockMove.browse(move_ids)  # repurpose field
             if product.valuation == "real_time":
-                product.valuation_discrepancy = (
-                    product.stock_value - product.account_value
-                )
-                product.qty_discrepancy = (
-                    product.qty_at_date - product.account_qty_at_date
-                )
+                product.valuation_discrepancy = product.stock_value - product.account_value
+                product.qty_discrepancy = product.qty_at_date - product.account_qty_at_date
             else:
-                product.valuation_discrepancy = 0.0
-                product.qty_discrepancy = 0.0
+                product.valuation_discrepancy = 0
+                product.qty_discrepancy = 0
+
 
     def action_view_amls(self):
         self.ensure_one()
@@ -183,7 +158,13 @@ class ProductProduct(models.Model):
             "stock_account.stock_valuation_layer_report_action"
         )
         action["domain"] = [
-            ("id", "in", self.stock_valuation_layer_ids.ids),
+            ("id", "in", self.stock_move_valuated_ids.ids),
         ]
         action["context"] = {}
+        return action
+
+    def action_view_valuation_moves(self):
+        self.ensure_one()
+        action = self.env["ir.actions.actions"]._for_xml_id("stock.stock_move_action")
+        action["domain"] = [("id","in",self.stock_move_valuated_ids.ids)]
         return action
