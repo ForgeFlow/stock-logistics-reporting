@@ -10,5 +10,7 @@ class SaleOrderLine(models.Model):
     def write(self, vals):
         res = super().write(vals)
         if vals.get("name"):
-            self.move_ids.description_picking = vals["name"]
+            moves = self.env["stock.move"].search([("sale_line_id", "=", self.id)])
+            if moves:
+                moves.write({"description_picking": vals["name"]})
         return res

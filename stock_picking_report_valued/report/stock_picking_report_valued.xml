@@ -7,10 +7,8 @@
         </xpath>
         <xpath expr="//th[@name='th_sml_quantity']" position="after">
             <t t-if="o.valued and o.sale_id and o.move_line_ids and is_outgoing">
-                <th name="th_sml_unit_price" class="text-end">
-                    <strong>Unit Price
-                    </strong>
-                </th>
+                <th name="th_sml_unit_price" class="text-end"><strong
+                    >Unit Price</strong></th>
                 <th
                     name="th_sml_discount"
                     class="text-end"
@@ -18,13 +16,9 @@
                 >
                     <strong>Discount</strong>
                 </th>
-                <th name="th_sml_subtotal" class="text-end">
-                    <strong>Subtotal
-                    </strong>
-                </th>
-                <th name="th_sml_taxes" class="text-end">
-                    <strong>Taxes</strong>
-                </th>
+                <th name="th_sml_subtotal" class="text-end"><strong
+                    >Subtotal</strong></th>
+                <th name="th_sml_taxes" class="text-end"><strong>Taxes</strong></th>
             </t>
         </xpath>
         <xpath expr="//th[@name='th_sml_qty_ordered']" position="attributes">
@@ -72,15 +66,9 @@
                 <table class="table table-sm mt32">
                     <thead>
                         <tr>
-                            <th class="text-end">
-                                <strong>Untaxed Amount</strong>
-                            </th>
-                            <th class="text-end">
-                                <strong>Taxes</strong>
-                            </th>
-                            <th class="text-end">
-                                <strong>Total</strong>
-                            </th>
+                            <th class="text-end"><strong>Untaxed Amount</strong></th>
+                            <th class="text-end"><strong>Taxes</strong></th>
+                            <th class="text-end"><strong>Total</strong></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -97,40 +85,6 @@
                         </tr>
                     </tbody>
                 </table>
-                <!--
-                    Total Picking block.
-                    This block is displayed only when the value returned by
-                    _get_report_total_amount() differs from amount_total.
-
-                    It is intended as an extension point for other modules that need to
-                    add extra amounts (taxes, fees, surcharges, etc.) to the printed
-                    picking total.
-                -->
-                <div
-                    id="valued_picking_total_block"
-                    name="valued_picking_total_block"
-                    class="col-6 ms-auto mt16"
-                    t-if="o._show_report_valued_total_block()"
-                >
-                    <table
-                        class="table table-sm"
-                        name="valued_picking_total_table"
-                        style="background-color: rgba(0, 0, 0, 0.1);"
-                    >
-                        <tr>
-                            <td>
-                                <strong>Total</strong>
-                            </td>
-                            <td class="text-end">
-                                <strong
-                                    t-esc="o._get_report_valued_total_amount()"
-                                    widget="monetary"
-                                    options="{'currency_field': 'currency_id'}"
-                                />
-                            </td>
-                        </tr>
-                    </table>
-                </div>
             </t>
         </xpath>
     </template>
@@ -142,8 +96,7 @@
         <xpath expr="//td[@name='move_line_lot_qty_done']" position="after">
             <t t-if="o.valued and o.sale_id and o.move_line_ids and is_outgoing">
                 <td name="td_sml_unit_price" class="text-end">
-                    <span t-field="move_line.sale_price_unit" />
-                </td>
+                    <span t-field="move_line.sale_price_unit" /></td>
                 <td
                     name="td_sml_discount"
                     class="text-end"
@@ -152,20 +105,9 @@
                     <span t-field="move_line.sale_discount" />
                 </td>
                 <td name="td_sml_subtotal" class="text-end">
-                    <span
-                        t-field="move_line.sale_price_subtotal"
-                        t-options="{
-                                'widget': 'monetary',
-                                'display_currency': (
-                                    move_line.currency_id
-                                    or move_line.move_id.sale_line_id.currency_id
-                                    or move_line.company_id.currency_id
-                                ) }"
-                    />
-                </td>
+                    <span t-field="move_line.sale_price_subtotal" /></td>
                 <td name="td_sml_taxes" class="text-end">
-                    <span t-field="move_line.sale_tax_description" />
-                </td>
+                    <span t-field="move_line.sale_tax_description" /></td>
             </t>
         </xpath>
     </template>

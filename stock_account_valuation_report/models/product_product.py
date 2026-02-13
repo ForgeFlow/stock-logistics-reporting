@@ -4,7 +4,6 @@
 
 
 from odoo import _, api, fields, models
-from odoo.tools import float_compare
 
 
 class ProductProduct(models.Model):
@@ -49,35 +48,21 @@ class ProductProduct(models.Model):
 
     @api.model
     def _search_qty_discrepancy(self, operator, value):
-        products = self.with_context(active_test=False).search(
-            [
-                ("type", "=", "product"),
-            ]
-        )
-        dp = self.env["decimal.precision"].precision_get("Product Price")
-        products_with_discrepancy = products.filtered(
-            lambda pp: float_compare(
-                pp.qty_at_date, pp.account_qty_at_date, precision_digits=dp
-            )
-            != 0
-        )
-        return [("id", "in", products_with_discrepancy.ids)]
+        products = self.env["product.product"].search([("type", "=", "product")])
+        pp_list = []
+        for pp in products:
+            if pp.qty_at_date != pp.account_qty_at_date:
+                pp_list.append(pp.id)
+        return [("id", "in", pp_list)]
 
     @api.model
     def _search_valuation_discrepancy(self, operator, value):
-        products = self.with_context(active_test=False).search(
-            [
-                ("type", "=", "product"),
-            ]
-        )
-        dp = self.env.ref("product.decimal_discount").precision_get("Discount")
-        products_with_discrepancy = products.filtered(
-            lambda pp: float_compare(
-                pp.stock_value, pp.account_value, precision_digits=dp
-            )
-            != 0
-        )
-        return [("id", "in", products_with_discrepancy.ids)]
+        products = self.env["product.product"].search([("type", "=", "product")])
+        pp_list = []
+        for pp in products:
+            if pp.stock_value != pp.account_value:
+                pp_list.append(pp.id)
+        return [("id", "in", pp_list)]
 
     def _compute_inventory_value(self):
         self.env["account.move.line"].check_access_rights("read")

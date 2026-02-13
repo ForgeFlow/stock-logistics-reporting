@@ -21,7 +21,6 @@ class StockPicking(models.Model):
         string="Stickers",
         compute="_compute_sticker_ids",
         store=False,
-        compute_sudo=True,
     )
 
     @api.depends("picking_type_id")
@@ -37,10 +36,7 @@ class StockPicking(models.Model):
         for picking in self:
             if not picking.show_product_stickers:
                 continue
-            picking.sticker_ids = picking.move_line_ids.product_id.get_product_stickers(
-                extra_domain=[
-                    "|",
-                    ("available_model_ids.model", "in", [self._name]),
-                    ("available_model_ids", "=", False),
-                ]
-            )
+            products = picking.move_line_ids.product_id
+            stickers = products.get_product_stickers()
+            if stickers:
+                picking.sticker_ids = stickers

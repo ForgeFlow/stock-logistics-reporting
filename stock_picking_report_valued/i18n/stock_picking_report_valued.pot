@@ -20,9 +20,7 @@ msgstr ""
 
 #. module: stock_picking_report_valued
 #: model_terms:ir.ui.view,arch_db:stock_picking_report_valued.valued_report_picking
-msgid ""
-"<strong>Subtotal\n"
-"                    </strong>"
+msgid "<strong>Subtotal</strong>"
 msgstr ""
 
 #. module: stock_picking_report_valued
@@ -37,9 +35,7 @@ msgstr ""
 
 #. module: stock_picking_report_valued
 #: model_terms:ir.ui.view,arch_db:stock_picking_report_valued.valued_report_picking
-msgid ""
-"<strong>Unit Price\n"
-"                    </strong>"
+msgid "<strong>Unit Price</strong>"
 msgstr ""
 
 #. module: stock_picking_report_valued

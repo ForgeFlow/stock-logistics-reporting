@@ -23,7 +23,3 @@
 * `Studio73 <https://www.studio73.es>`_:
 
   * Miguel Gandia <miguel@studio73.es>
-
-* `Sygel <https://sygel.es>`_:
-
-  * Angel Rivas <angel.rivas@sygel.es>

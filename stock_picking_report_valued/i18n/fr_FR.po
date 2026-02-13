@@ -23,10 +23,8 @@ msgstr "<strong>Remise</strong>"
 
 #. module: stock_picking_report_valued
 #: model_terms:ir.ui.view,arch_db:stock_picking_report_valued.valued_report_picking
-msgid ""
-"<strong>Subtotal\n"
-"                    </strong>"
-msgstr ""
+msgid "<strong>Subtotal</strong>"
+msgstr "<strong>Sous-total</strong>"
 
 #. module: stock_picking_report_valued
 #: model_terms:ir.ui.view,arch_db:stock_picking_report_valued.valued_report_picking
@@ -40,10 +38,8 @@ msgstr ""
 
 #. module: stock_picking_report_valued
 #: model_terms:ir.ui.view,arch_db:stock_picking_report_valued.valued_report_picking
-msgid ""
-"<strong>Unit Price\n"
-"                    </strong>"
-msgstr ""
+msgid "<strong>Unit Price</strong>"
+msgstr "<strong>Prix Unitaire</strong>"
 
 #. module: stock_picking_report_valued
 #: model_terms:ir.ui.view,arch_db:stock_picking_report_valued.valued_report_picking
@@ -135,12 +131,6 @@ msgstr "BL Valorisé"
 #: model:ir.model.fields,help:stock_picking_report_valued.field_stock_picking__valued
 msgid "You can select which partners have valued pickings"
 msgstr "Vous pouvez sélectionner quels partenaires ont une valorisation"
-
-#~ msgid "<strong>Subtotal</strong>"
-#~ msgstr "<strong>Sous-total</strong>"
-
-#~ msgid "<strong>Unit Price</strong>"
-#~ msgstr "<strong>Prix Unitaire</strong>"
 
 #~ msgid "<strong>Qty Reserved</strong>"
 #~ msgstr "<strong>Qté Réservée</strong>"

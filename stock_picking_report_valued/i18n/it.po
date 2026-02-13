@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Odoo Server 16.0\n"
 "Report-Msgid-Bugs-To: \n"
-"PO-Revision-Date: 2026-01-26 13:09+0000\n"
+"PO-Revision-Date: 2024-08-20 09:58+0000\n"
 "Last-Translator: mymage <stefano.consolaro@mymage.it>\n"
 "Language-Team: none\n"
 "Language: it\n"
@@ -14,7 +14,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: \n"
 "Plural-Forms: nplurals=2; plural=n != 1;\n"
-"X-Generator: Weblate 5.15.2\n"
+"X-Generator: Weblate 5.6.2\n"
 
 #. module: stock_picking_report_valued
 #: model_terms:ir.ui.view,arch_db:stock_picking_report_valued.valued_report_picking
@@ -23,12 +23,8 @@ msgstr "<strong>Sconto</strong>"
 
 #. module: stock_picking_report_valued
 #: model_terms:ir.ui.view,arch_db:stock_picking_report_valued.valued_report_picking
-msgid ""
-"<strong>Subtotal\n"
-"                    </strong>"
-msgstr ""
-"<strong>Sub totale\n"
-"                    </strong>"
+msgid "<strong>Subtotal</strong>"
+msgstr "<strong>Subtotale</strong>"
 
 #. module: stock_picking_report_valued
 #: model_terms:ir.ui.view,arch_db:stock_picking_report_valued.valued_report_picking
@@ -42,12 +38,8 @@ msgstr "<strong>Totale</strong>"
 
 #. module: stock_picking_report_valued
 #: model_terms:ir.ui.view,arch_db:stock_picking_report_valued.valued_report_picking
-msgid ""
-"<strong>Unit Price\n"
-"                    </strong>"
-msgstr ""
-"<strong>Prezzo unitario\n"
-"                    </strong>"
+msgid "<strong>Unit Price</strong>"
+msgstr "<strong>Prezzo unitario</strong>"
 
 #. module: stock_picking_report_valued
 #: model_terms:ir.ui.view,arch_db:stock_picking_report_valued.valued_report_picking
@@ -139,12 +131,6 @@ msgstr "Prelievi valorizzati"
 #: model:ir.model.fields,help:stock_picking_report_valued.field_stock_picking__valued
 msgid "You can select which partners have valued pickings"
 msgstr "Si può selezionare quali partner hanno prelievi valorizzati"
-
-#~ msgid "<strong>Subtotal</strong>"
-#~ msgstr "<strong>Subtotale</strong>"
-
-#~ msgid "<strong>Unit Price</strong>"
-#~ msgstr "<strong>Prezzo unitario</strong>"
 
 #~ msgid "<strong>Qty Reserved</strong>"
 #~ msgstr "<strong>Q.tà prenotata</strong>"

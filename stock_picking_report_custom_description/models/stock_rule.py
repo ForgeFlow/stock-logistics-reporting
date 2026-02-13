@@ -31,15 +31,6 @@ class StockRule(models.Model):
         )
         if values.get("sale_line_id"):
             line = self.env["sale.order.line"].browse(values["sale_line_id"])
-            # Avoid double printing the name in the picking
-            pattern = f"{line.product_id.display_name}\n"
-            description_picking = line.name
-            if description_picking.startswith(pattern):
-                description_picking = description_picking.replace(pattern, "")
-            if (
-                description_picking
-                and description_picking != line.product_id.display_name
-            ):
-                res["description_picking"] = description_picking
+            res["description_picking"] = line.name
             res["name"] = line.name
         return res
