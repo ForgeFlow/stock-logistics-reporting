@@ -26,15 +26,29 @@ class ProductProduct(models.Model):
         compute="_compute_inventory_value",
         digits="Product Unit of Measure",
     )
+    account_qty_at_date = fields.Float(
+        "Accounting Quantity",
+        compute="_compute_inventory_value",
+        digits="Product Unit of Measure",
+    )
     valuation_discrepancy = fields.Monetary(
         compute="_compute_inventory_value",
         search="_search_valuation_discrepancy",
         currency_field="cost_currency_id",
     )
+    qty_discrepancy = fields.Float(
+        compute="_compute_inventory_value",
+        search="_search_qty_discrepancy",
+        digits="Product Unit of Measure",
+    )
 
     @api.model
     def _search_valuation_discrepancy(self, operator, value):
         return Domain("id", "in", self._get_discrepancy_product_ids())
+
+    @api.model
+    def _search_qty_discrepancy(self, operator, value):
+        return Domain("id", "in", self._get_qty_discrepancy_product_ids())
 
     @api.model
     def _get_discrepancy_product_ids(self):
@@ -116,6 +130,90 @@ class ProductProduct(models.Model):
             != 0
         ]
 
+    @api.model
+    def _get_qty_discrepancy_product_ids(self):
+        """Return product IDs where stock and accounting quantities diverge."""
+        to_date = self.env.context.get("at_date", False)
+        company_id = self.env.company.id
+        categories = self.env["product.category"].search(
+            Domain("property_valuation", "=", "real_time")
+        )
+        company_default = self.env.company.account_stock_valuation_id
+        categ_field = self.env["product.category"]._fields[
+            "property_stock_valuation_account_id"
+        ]
+        categ_accounts = {}
+        for c in categories:
+            acc = (
+                c.property_stock_valuation_account_id
+                or categ_field.get_company_dependent_fallback(c)
+                or company_default
+            )
+            if acc:
+                categ_accounts[c.id] = acc.id
+        if not categ_accounts:
+            return []
+        account_ids = list(set(categ_accounts.values()))
+        # pylint: disable=E8103
+        self.env.cr.execute(
+            """
+            SELECT pp.id, pt.categ_id
+            FROM product_product pp
+            JOIN product_template pt ON pt.id = pp.product_tmpl_id
+            WHERE pt.categ_id = ANY(%s)
+            """,
+            (list(categ_accounts.keys()),),
+        )
+        rows = self.env.cr.fetchall()
+        if not rows:
+            return []
+        product_ids = [row[0] for row in rows]
+        date_param = (to_date,) if to_date else ()
+        aml_date_clause = "AND aml.date <= %s" if to_date else ""
+        move_domain = (
+            Domain("product_id", "in", product_ids)
+            & Domain("company_id", "=", company_id)
+            & Domain("state", "=", "done")
+        )
+        if to_date:
+            move_domain &= Domain("date", "<=", to_date)
+        stock_qtys = {}
+        for move in self.env["stock.move"].search(move_domain):
+            pid = move.product_id.id
+            stock_qtys[pid] = stock_qtys.get(pid, 0.0) + move.remaining_qty
+        self.env["account.move.line"].flush_model()
+        # pylint: disable=E8103
+        self.env.cr.execute(
+            f"""
+            SELECT aml.product_id,
+            SUM(
+                CASE WHEN aml.display_type IN ('product', 'cogs')
+                THEN SIGN(aml.balance) * aml.quantity
+                ELSE 0 END
+            )
+            FROM account_move_line aml
+            WHERE aml.parent_state = 'posted'
+            AND aml.company_id = %s
+            AND aml.product_id = ANY(%s)
+            AND aml.account_id = ANY(%s)
+            {aml_date_clause}
+            GROUP BY aml.product_id
+            """,
+            (company_id, product_ids, account_ids) + date_param,
+        )
+        acct_qtys = dict(self.env.cr.fetchall())
+        products_by_id = {p.id: p for p in self.browse(product_ids)}
+        return [
+            pid
+            for pid in product_ids
+            if float_compare(
+                stock_qtys.get(pid, 0.0),
+                acct_qtys.get(pid, 0.0),
+                precision_rounding=products_by_id[pid].uom_id.rounding,
+            )
+            != 0
+        ]
+
     def _get_valuation_aml_ids(self, product, to_date):
         valuation_account_id = product._get_product_accounts()["stock_valuation"].id
         if not valuation_account_id:
@@ -154,11 +252,18 @@ class ProductProduct(models.Model):
         valuation_account_ids = set(product_valuation_account.values())
 
         accounting_values = {}
+        accounting_qtys = {}
         if valuation_account_ids:
             self.env["account.move.line"].flush_model()
             # pylint: disable=E8103
             query = """
-                SELECT aml.product_id, aml.account_id, sum(aml.balance)
+                SELECT aml.product_id, aml.account_id,
+                sum(aml.balance),
+                sum(
+                    CASE WHEN aml.display_type IN ('product', 'cogs')
+                    THEN SIGN(aml.balance) * aml.quantity
+                    ELSE 0 END
+                )
                 FROM account_move_line AS aml
                 WHERE aml.product_id IN %s
                 AND aml.parent_state = 'posted'
@@ -179,6 +284,7 @@ class ProductProduct(models.Model):
             self.env.cr.execute(query, params=params)
             for row in self.env.cr.fetchall():
                 accounting_values[(row[0], row[1])] = row[2]
+                accounting_qtys[(row[0], row[1])] = row[3]
         # 2) INVENTORY VALUES
         move_domain = (
             Domain("product_id", "in", self.ids)
@@ -200,8 +306,12 @@ class ProductProduct(models.Model):
                 product.account_value = accounting_values.get(
                     (product.id, valuation_account_id), 0
                 )
+                product.account_qty_at_date = accounting_qtys.get(
+                    (product.id, valuation_account_id), 0
+                )
             else:
                 product.account_value = 0
+                product.account_qty_at_date = 0
             move_data = move_values.get(product.id, {})
             product.qty_at_date = move_data.get("qty", 0)
             product.stock_value = move_data.get("value", 0)
@@ -209,8 +319,12 @@ class ProductProduct(models.Model):
                 product.valuation_discrepancy = (
                     product.stock_value - product.account_value
                 )
+                product.qty_discrepancy = (
+                    product.qty_at_date - product.account_qty_at_date
+                )
             else:
                 product.valuation_discrepancy = 0
+                product.qty_discrepancy = 0
 
     def action_view_amls(self):
         self.ensure_one()

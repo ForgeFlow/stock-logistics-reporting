@@ -111,3 +111,57 @@ class TestStockAccountValuationReport(TestStockValuationCommon):
             Domain("product_id", "=", self.product_fifo_auto.id)
         )
         self.assertEqual(sum(inv_aml.mapped("balance")), 0.0)
+
+    def test_04_qty_discrepancy(self):
+        """Without a valuation entry, the accounting quantity does not move"""
+        self._use_inventory_location_accounting()
+        self._make_in_move(self.product_fifo_auto, quantity=1, unit_cost=10.0)
+        self.product_fifo_auto._compute_inventory_value()
+        # No journal entry was created for this move (no location valuation
+        # account configured for supplier/customer), so the accounting
+        # quantity does not move even though the physical stock did.
+        self.assertEqual(self.product_fifo_auto.qty_at_date, 1.0)
+        self.assertEqual(self.product_fifo_auto.account_qty_at_date, 0.0)
+        self.assertEqual(self.product_fifo_auto.qty_discrepancy, 1.0)
+        discrepancy_ids = self.env["product.product"]._get_qty_discrepancy_product_ids()
+        self.assertIn(self.product_fifo_auto.id, discrepancy_ids)
+
+        self._make_out_move(self.product_fifo_auto, 1.0)
+        self.product_fifo_auto._compute_inventory_value()
+        self.assertEqual(self.product_fifo_auto.qty_at_date, 0.0)
+        self.assertEqual(self.product_fifo_auto.account_qty_at_date, 0.0)
+        self.assertEqual(self.product_fifo_auto.qty_discrepancy, 0.0)
+
+    def test_05_qty_discrepancy_with_bill_and_invoice(self):
+        """A vendor bill counts as a positive accounting quantity and a
+        customer invoice as a negative one, on top of the same valuation
+        account, mirroring test_03 but for quantity instead of value"""
+        self._use_inventory_location_accounting()
+        self._make_in_move(self.product_fifo_auto, 1, unit_cost=10.0)
+        self.product_fifo_auto._compute_inventory_value()
+        self.assertEqual(self.product_fifo_auto.qty_at_date, 1.0)
+        self.assertEqual(self.product_fifo_auto.account_qty_at_date, 0.0)
+        self.assertEqual(self.product_fifo_auto.qty_discrepancy, 1.0)
+
+        self._create_bill(self.product_fifo_auto, 1.0, price_unit=10.0)
+        self.product_fifo_auto._compute_inventory_value()
+        # The bill line posted to the valuation account counts as +1
+        self.assertEqual(self.product_fifo_auto.qty_at_date, 1.0)
+        self.assertEqual(self.product_fifo_auto.account_qty_at_date, 1.0)
+        self.assertEqual(self.product_fifo_auto.qty_discrepancy, 0.0)
+
+        self._make_out_move(self.product_fifo_auto, 1.0)
+        self.product_fifo_auto._compute_inventory_value()
+        # Delivery alone posts no journal entry, so accounting quantity
+        # still only reflects the bill
+        self.assertEqual(self.product_fifo_auto.qty_at_date, 0.0)
+        self.assertEqual(self.product_fifo_auto.account_qty_at_date, 1.0)
+        self.assertEqual(self.product_fifo_auto.qty_discrepancy, -1.0)
+
+        self._create_invoice(self.product_fifo_auto, 1.0, price_unit=10.0)
+        self.product_fifo_auto._compute_inventory_value()
+        # The customer invoice's COGS line credits the valuation account,
+        # counting as -1, netting the bill's +1 back to 0
+        self.assertEqual(self.product_fifo_auto.qty_at_date, 0.0)
+        self.assertEqual(self.product_fifo_auto.account_qty_at_date, 0.0)
+        self.assertEqual(self.product_fifo_auto.qty_discrepancy, 0.0)
