@@ -9,7 +9,7 @@
     "author": "ForgeFlow S.L., Odoo Community Association (OCA)",
     "website": "https://github.com/OCA/stock-logistics-reporting",
     "category": "Warehouse Management",
-    "depends": ["stock_account"],
+    "depends": ["stock_account", "account_move_line_stock_quantity"],
     "license": "AGPL-3",
     "data": [
         "security/ir.model.access.csv",

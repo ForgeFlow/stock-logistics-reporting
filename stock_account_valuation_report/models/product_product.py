@@ -187,11 +187,17 @@ class ProductProduct(models.Model):
             f"""
             SELECT aml.product_id,
             SUM(
-                CASE WHEN aml.display_type IN ('product', 'cogs')
+                CASE
+                WHEN aml.stock_quantity != 0 THEN aml.stock_quantity
+                WHEN am.move_type IN (
+                    'in_invoice', 'in_refund', 'out_invoice', 'out_refund'
+                ) AND aml.display_type IN ('product', 'cogs')
                 THEN SIGN(aml.balance) * aml.quantity
-                ELSE 0 END
+                ELSE 0
+            END
             )
             FROM account_move_line aml
+            JOIN account_move am ON am.id = aml.move_id
             WHERE aml.parent_state = 'posted'
             AND aml.company_id = %s
             AND aml.product_id = ANY(%s)
@@ -260,11 +266,17 @@ class ProductProduct(models.Model):
                 SELECT aml.product_id, aml.account_id,
                 sum(aml.balance),
                 sum(
-                    CASE WHEN aml.display_type IN ('product', 'cogs')
+                    CASE
+                    WHEN aml.stock_quantity != 0 THEN aml.stock_quantity
+                    WHEN am.move_type IN (
+                        'in_invoice', 'in_refund', 'out_invoice', 'out_refund'
+                    ) AND aml.display_type IN ('product', 'cogs')
                     THEN SIGN(aml.balance) * aml.quantity
-                    ELSE 0 END
+                    ELSE 0
+                END
                 )
                 FROM account_move_line AS aml
+                JOIN account_move AS am ON am.id = aml.move_id
                 WHERE aml.product_id IN %s
                 AND aml.parent_state = 'posted'
                 AND aml.company_id = %s

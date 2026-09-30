@@ -165,3 +165,26 @@ class TestStockAccountValuationReport(TestStockValuationCommon):
         self.assertEqual(self.product_fifo_auto.qty_at_date, 0.0)
         self.assertEqual(self.product_fifo_auto.account_qty_at_date, 0.0)
         self.assertEqual(self.product_fifo_auto.qty_discrepancy, 0.0)
+
+    def _use_location_accounting_on_partner_locations(self):
+        """Valuation accounts on the vendor and customer locations, so the
+        moves themselves post the valuation entries."""
+        counterpart = self.env["account.account"].create(
+            {
+                "name": "Stock Counterpart",
+                "code": "100152",
+                "account_type": "asset_current",
+            }
+        )
+        self.supplier_location.valuation_account_id = counterpart.id
+        self.customer_location.valuation_account_id = counterpart.id
+
+    def test_06_accounting_qty_follows_what_the_move_posted(self):
+        """A move counts for what it moved, not for one unit per entry."""
+        self._use_location_accounting_on_partner_locations()
+        self._make_in_move(self.product_fifo_auto, quantity=10, unit_cost=7.0)
+        self._make_out_move(self.product_fifo_auto, 4.0)
+        self.product_fifo_auto._compute_inventory_value()
+        self.assertEqual(self.product_fifo_auto.qty_at_date, 6.0)
+        self.assertEqual(self.product_fifo_auto.account_qty_at_date, 6.0)
+        self.assertEqual(self.product_fifo_auto.qty_discrepancy, 0.0)
