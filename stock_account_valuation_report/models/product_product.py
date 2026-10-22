@@ -36,6 +36,23 @@ class ProductProduct(models.Model):
     def _search_valuation_discrepancy(self, operator, value):
         return Domain("id", "in", self._get_discrepancy_product_ids())
 
+    def _convert_to_current_company(self, to_date=False):
+        """The value of the stock is expressed in the currency of the company in
+        use, so the balances of the other companies are converted to it before
+        being added up."""
+        company = self.env.company
+        target = company.currency_id
+        date = fields.Date.to_date(to_date) or fields.Date.context_today(self)
+
+        def convert(amount, from_company):
+            if from_company.currency_id == target:
+                return amount
+            # the rates of the company in use, the ones the value of the stock
+            # is converted with
+            return from_company.currency_id._convert(amount, target, company, date)
+
+        return convert
+
     def _get_stock_qty_and_value(self, to_date=False):
         products = self.sudo().with_company(self.env.company)._with_valuation_context()
         if to_date:
@@ -69,7 +86,7 @@ class ProductProduct(models.Model):
                 if acc:
                     categ_accounts[c.id] = acc.id
             if categ_accounts:
-                accounts_by_company[company.id] = categ_accounts
+                accounts_by_company[company] = categ_accounts
         categ_ids = sorted(
             {categ for accounts in accounts_by_company.values() for categ in accounts}
         )
@@ -100,8 +117,10 @@ class ProductProduct(models.Model):
             .items()
         }
         self.env["account.move.line"].flush_model()
+        _convert = self._convert_to_current_company(to_date)
         acct_vals = {}
-        for company_id, categ_accounts in accounts_by_company.items():
+        for company, categ_accounts in accounts_by_company.items():
+            company_id = company.id
             account_ids = sorted(set(categ_accounts.values()))
             # pylint: disable=E8103
             self.env.cr.execute(
@@ -122,7 +141,9 @@ class ProductProduct(models.Model):
                 # the same pairing the displayed accounting value uses
                 if categ_accounts.get(categ_by_product.get(product_id)) != account_id:
                     continue
-                acct_vals[product_id] = acct_vals.get(product_id, 0.0) + balance
+                acct_vals[product_id] = acct_vals.get(product_id, 0.0) + _convert(
+                    balance, company
+                )
         return [
             pid
             for pid in product_ids
@@ -176,6 +197,7 @@ class ProductProduct(models.Model):
         # up, each company with the valuation account it resolves to.
         accounting_values = {}
         valued_product_ids = set()
+        _convert = self._convert_to_current_company(to_date)
         for company in self.env.companies:
             product_valuation_account = {}
             for product in self.with_company(company):
@@ -211,9 +233,9 @@ class ProductProduct(models.Model):
             for product_id, account_id, balance in self.env.cr.fetchall():
                 if product_valuation_account.get(product_id) != account_id:
                     continue
-                accounting_values[product_id] = (
-                    accounting_values.get(product_id, 0) + balance
-                )
+                accounting_values[product_id] = accounting_values.get(
+                    product_id, 0
+                ) + _convert(balance, company)
         # 2) INVENTORY VALUES
         stock_data = self._get_stock_qty_and_value(to_date)
         for product in self:
