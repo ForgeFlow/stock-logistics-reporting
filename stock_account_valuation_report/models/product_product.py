@@ -7,6 +7,28 @@ from odoo import api, fields, models
 from odoo.fields import Domain
 from odoo.tools import float_compare
 
+COMPARISONS = {
+    "=": lambda comparison: comparison == 0,
+    "!=": lambda comparison: comparison != 0,
+    "<": lambda comparison: comparison < 0,
+    "<=": lambda comparison: comparison <= 0,
+    ">": lambda comparison: comparison > 0,
+    ">=": lambda comparison: comparison >= 0,
+}
+
+
+def _matches(discrepancy, operator, value, rounding):
+    """Compare the discrepancy with the value of the domain, at the precision of
+    the currency, so that the rounding of the computation is not searched on."""
+    if operator in ("in", "not in"):
+        found = any(
+            float_compare(discrepancy, v or 0.0, precision_rounding=rounding) == 0
+            for v in value
+        )
+        return found if operator == "in" else not found
+    comparison = float_compare(discrepancy, value or 0.0, precision_rounding=rounding)
+    return COMPARISONS[operator](comparison)
+
 
 class ProductProduct(models.Model):
     _inherit = "product.product"
@@ -34,7 +56,39 @@ class ProductProduct(models.Model):
 
     @api.model
     def _search_valuation_discrepancy(self, operator, value):
-        return Domain("id", "in", self._get_discrepancy_product_ids())
+        """The discrepancy is computed, so the condition of the domain is applied
+        on the discrepancy of every product that can hold one, the ones valued in
+        real time."""
+        if operator not in COMPARISONS and operator not in ("in", "not in"):
+            return NotImplemented
+        rounding = self.env.company.currency_id.rounding
+        discrepancies = self._get_valuation_discrepancies()
+        return Domain(
+            "id",
+            "in",
+            [
+                product_id
+                for product_id, discrepancy in discrepancies.items()
+                if _matches(discrepancy, operator, value, rounding)
+            ],
+        )
+
+    def _convert_to_current_company(self, to_date=False):
+        """The value of the stock is expressed in the currency of the company in
+        use, so the balances of the other companies are converted to it before
+        being added up."""
+        company = self.env.company
+        target = company.currency_id
+        date = fields.Date.to_date(to_date) or fields.Date.context_today(self)
+
+        def convert(amount, from_company):
+            if from_company.currency_id == target:
+                return amount
+            # the rates of the company in use, the ones the value of the stock
+            # is converted with
+            return from_company.currency_id._convert(amount, target, company, date)
+
+        return convert
 
     def _get_stock_qty_and_value(self, to_date=False):
         products = self.sudo().with_company(self.env.company)._with_valuation_context()
@@ -45,27 +99,47 @@ class ProductProduct(models.Model):
     @api.model
     def _get_discrepancy_product_ids(self):
         """Return product IDs where stock and accounting values diverge."""
+        rounding = self.env.company.currency_id.rounding
+        return [
+            product_id
+            for product_id, discrepancy in self._get_valuation_discrepancies().items()
+            if float_compare(discrepancy, 0.0, precision_rounding=rounding) != 0
+        ]
+
+    @api.model
+    def _get_valuation_discrepancies(self):
+        """Return, per product valued in real time, how much its stock value
+        diverges from its accounting value."""
         to_date = self.env.context.get("at_date", False)
-        company_id = self.env.company.id
-        categories = self.env["product.category"].search(
-            Domain("property_valuation", "=", "real_time")
-        )
-        company_default = self.env.company.account_stock_valuation_id
+        # The value of the stock is the one of every allowed company, see
+        # _get_stock_qty_and_value, so the accounting value is read from the
+        # same companies, each with the valuation account it resolves to.
         categ_field = self.env["product.category"]._fields[
             "property_stock_valuation_account_id"
         ]
-        categ_accounts = {}
-        for c in categories:
-            acc = (
-                c.property_stock_valuation_account_id
-                or categ_field.get_company_dependent_fallback(c)
-                or company_default
+        accounts_by_company = {}
+        for company in self.env.companies:
+            categories = (
+                self.env["product.category"]
+                .with_company(company)
+                .search(Domain("property_valuation", "=", "real_time"))
             )
-            if acc:
-                categ_accounts[c.id] = acc.id
-        if not categ_accounts:
-            return []
-        account_ids = list(set(categ_accounts.values()))
+            categ_accounts = {}
+            for c in categories:
+                acc = (
+                    c.property_stock_valuation_account_id
+                    or categ_field.get_company_dependent_fallback(c)
+                    or company.account_stock_valuation_id
+                )
+                if acc:
+                    categ_accounts[c.id] = acc.id
+            if categ_accounts:
+                accounts_by_company[company] = categ_accounts
+        categ_ids = sorted(
+            {categ for accounts in accounts_by_company.values() for categ in accounts}
+        )
+        if not categ_ids:
+            return {}
         # pylint: disable=E8103
         self.env.cr.execute(
             """
@@ -74,16 +148,15 @@ class ProductProduct(models.Model):
             JOIN product_template pt ON pt.id = pp.product_tmpl_id
             WHERE pt.categ_id = ANY(%s)
             """,
-            (list(categ_accounts.keys()),),
+            (categ_ids,),
         )
         rows = self.env.cr.fetchall()
         if not rows:
-            return []
-        product_to_account = {row[0]: categ_accounts[row[1]] for row in rows}
-        product_ids = list(product_to_account.keys())
+            return {}
+        categ_by_product = dict(rows)
+        product_ids = list(categ_by_product)
         date_param = (to_date,) if to_date else ()
         aml_date_clause = "AND aml.date <= %s" if to_date else ""
-        precision_kwargs = {"precision_rounding": self.env.company.currency_id.rounding}
         stock_vals = {
             pid: value
             for pid, (_qty, value) in self.browse(product_ids)
@@ -91,35 +164,49 @@ class ProductProduct(models.Model):
             .items()
         }
         self.env["account.move.line"].flush_model()
-        # pylint: disable=E8103
-        self.env.cr.execute(
-            f"""
-            SELECT aml.product_id, SUM(aml.balance)
-            FROM account_move_line aml
-            WHERE aml.parent_state = 'posted'
-            AND aml.company_id = %s
-            AND aml.product_id = ANY(%s)
-            AND aml.account_id = ANY(%s)
-            {aml_date_clause}
-            GROUP BY aml.product_id
-            """,
-            (company_id, product_ids, account_ids) + date_param,
-        )
-        acct_vals = dict(self.env.cr.fetchall())
-        return [
-            pid
-            for pid in product_ids
-            if float_compare(
-                stock_vals.get(pid, 0.0),
-                acct_vals.get(pid, 0.0),
-                **precision_kwargs,
+        _convert = self._convert_to_current_company(to_date)
+        acct_vals = {}
+        for company, categ_accounts in accounts_by_company.items():
+            company_id = company.id
+            account_ids = sorted(set(categ_accounts.values()))
+            # pylint: disable=E8103
+            self.env.cr.execute(
+                f"""
+                SELECT aml.product_id, aml.account_id, SUM(aml.balance)
+                FROM account_move_line aml
+                WHERE aml.parent_state = 'posted'
+                AND aml.company_id = %s
+                AND aml.product_id = ANY(%s)
+                AND aml.account_id = ANY(%s)
+                {aml_date_clause}
+                GROUP BY aml.product_id, aml.account_id
+                """,
+                (company_id, product_ids, account_ids) + date_param,
             )
-            != 0
-        ]
+            for product_id, account_id, balance in self.env.cr.fetchall():
+                # only the account this company resolves to for the product,
+                # the same pairing the displayed accounting value uses
+                if categ_accounts.get(categ_by_product.get(product_id)) != account_id:
+                    continue
+                acct_vals[product_id] = acct_vals.get(product_id, 0.0) + _convert(
+                    balance, company
+                )
+        return {
+            pid: stock_vals.get(pid, 0.0) - acct_vals.get(pid, 0.0)
+            for pid in product_ids
+        }
 
     def _get_valuation_aml_ids(self, product, to_date):
-        valuation_account_id = product._get_product_accounts()["stock_valuation"].id
-        if not valuation_account_id:
+        # the journal items of every allowed company, each with the valuation
+        # account it resolves to, so they add up to the accounting value shown
+        valuation_account_ids = set()
+        for company in self.env.companies:
+            account = product.with_company(company)._get_product_accounts()[
+                "stock_valuation"
+            ]
+            if account:
+                valuation_account_ids.add(account.id)
+        if not valuation_account_ids:
             return []
         self.env["account.move.line"].flush_model()
         # pylint: disable=E8103
@@ -128,11 +215,11 @@ class ProductProduct(models.Model):
             FROM account_move_line AS aml
             WHERE aml.product_id = %s
             AND aml.parent_state = 'posted'
-            AND aml.company_id = %s
-            AND aml.account_id = %s
+            AND aml.company_id = ANY(%s)
+            AND aml.account_id = ANY(%s)
             {where_date_clause}
         """
-        params = (product.id, self.env.company.id, valuation_account_id)
+        params = (product.id, self.env.companies.ids, sorted(valuation_account_ids))
         where_date_clause = "AND aml.date <= %s" if to_date else ""
         query = query.format(where_date_clause=where_date_clause)
         if to_date:
@@ -145,17 +232,23 @@ class ProductProduct(models.Model):
         self.env["account.move.line"].check_access("read")
         to_date = self.env.context.get("at_date", False)
         # 1) ACCOUNTING VALUES — restrict to valuation accounts only
-        # Use _get_product_accounts() for the full 3-level fallback on account lookup
-        product_valuation_account = {}
-        for product in self:
-            if product.valuation == "real_time":
-                acc_id = product._get_product_accounts()["stock_valuation"].id
-                if acc_id:
-                    product_valuation_account[product.id] = acc_id
-        valuation_account_ids = set(product_valuation_account.values())
-
+        # Use _get_product_accounts() for the full 3-level fallback on account lookup.
+        # The value of the stock is the one of every allowed company, see
+        # _get_stock_qty_and_value, so the journal items of all of them are added
+        # up, each company with the valuation account it resolves to.
         accounting_values = {}
-        if valuation_account_ids:
+        valued_product_ids = set()
+        _convert = self._convert_to_current_company(to_date)
+        for company in self.env.companies:
+            product_valuation_account = {}
+            for product in self.with_company(company):
+                if product.valuation == "real_time":
+                    acc_id = product._get_product_accounts()["stock_valuation"].id
+                    if acc_id:
+                        product_valuation_account[product.id] = acc_id
+                        valued_product_ids.add(product.id)
+            if not product_valuation_account:
+                continue
             self.env["account.move.line"].flush_model()
             # pylint: disable=E8103
             query = """
@@ -169,31 +262,29 @@ class ProductProduct(models.Model):
                 GROUP BY aml.product_id, aml.account_id
             """
             params = (
-                tuple(self.ids),
-                self.env.company.id,
-                tuple(valuation_account_ids),
+                tuple(product_valuation_account),
+                company.id,
+                tuple(set(product_valuation_account.values())),
             )
             where_date_clause = "AND aml.date <= %s" if to_date else ""
             query = query.format(where_date_clause=where_date_clause)
             if to_date:
                 params = params + (to_date,)
             self.env.cr.execute(query, params=params)
-            for row in self.env.cr.fetchall():
-                accounting_values[(row[0], row[1])] = row[2]
+            for product_id, account_id, balance in self.env.cr.fetchall():
+                if product_valuation_account.get(product_id) != account_id:
+                    continue
+                accounting_values[product_id] = accounting_values.get(
+                    product_id, 0
+                ) + _convert(balance, company)
         # 2) INVENTORY VALUES
         stock_data = self._get_stock_qty_and_value(to_date)
         for product in self:
-            if product.valuation == "real_time":
-                valuation_account_id = product_valuation_account.get(product.id)
-                product.account_value = accounting_values.get(
-                    (product.id, valuation_account_id), 0
-                )
-            else:
-                product.account_value = 0
+            product.account_value = accounting_values.get(product.id, 0)
             qty, value = stock_data.get(product.id, (0, 0))
             product.qty_at_date = qty
             product.stock_value = value
-            if product.valuation == "real_time":
+            if product.id in valued_product_ids:
                 product.valuation_discrepancy = (
                     product.stock_value - product.account_value
                 )
@@ -221,10 +312,10 @@ class ProductProduct(models.Model):
         # pylint: disable=E8103
         query = """
             SELECT id FROM stock_move
-            WHERE state = 'done' AND company_id = %s AND product_id = ANY(%s)
+            WHERE state = 'done' AND company_id = ANY(%s) AND product_id = ANY(%s)
             {where_date_clause}
         """
-        params = (self.env.company.id, product_ids)
+        params = (self.env.companies.ids, product_ids)
         date_clause = "AND date <= %s" if to_date else ""
         query = query.format(where_date_clause=date_clause)
         if to_date:
