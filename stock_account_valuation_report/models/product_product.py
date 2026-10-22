@@ -7,6 +7,28 @@ from odoo import api, fields, models
 from odoo.fields import Domain
 from odoo.tools import float_compare
 
+COMPARISONS = {
+    "=": lambda comparison: comparison == 0,
+    "!=": lambda comparison: comparison != 0,
+    "<": lambda comparison: comparison < 0,
+    "<=": lambda comparison: comparison <= 0,
+    ">": lambda comparison: comparison > 0,
+    ">=": lambda comparison: comparison >= 0,
+}
+
+
+def _matches(discrepancy, operator, value, rounding):
+    """Compare the discrepancy with the value of the domain, at the precision of
+    the currency, so that the rounding of the computation is not searched on."""
+    if operator in ("in", "not in"):
+        found = any(
+            float_compare(discrepancy, v or 0.0, precision_rounding=rounding) == 0
+            for v in value
+        )
+        return found if operator == "in" else not found
+    comparison = float_compare(discrepancy, value or 0.0, precision_rounding=rounding)
+    return COMPARISONS[operator](comparison)
+
 
 class ProductProduct(models.Model):
     _inherit = "product.product"
@@ -34,7 +56,22 @@ class ProductProduct(models.Model):
 
     @api.model
     def _search_valuation_discrepancy(self, operator, value):
-        return Domain("id", "in", self._get_discrepancy_product_ids())
+        """The discrepancy is computed, so the condition of the domain is applied
+        on the discrepancy of every product that can hold one, the ones valued in
+        real time."""
+        if operator not in COMPARISONS and operator not in ("in", "not in"):
+            return NotImplemented
+        rounding = self.env.company.currency_id.rounding
+        discrepancies = self._get_valuation_discrepancies()
+        return Domain(
+            "id",
+            "in",
+            [
+                product_id
+                for product_id, discrepancy in discrepancies.items()
+                if _matches(discrepancy, operator, value, rounding)
+            ],
+        )
 
     def _convert_to_current_company(self, to_date=False):
         """The value of the stock is expressed in the currency of the company in
@@ -62,6 +99,17 @@ class ProductProduct(models.Model):
     @api.model
     def _get_discrepancy_product_ids(self):
         """Return product IDs where stock and accounting values diverge."""
+        rounding = self.env.company.currency_id.rounding
+        return [
+            product_id
+            for product_id, discrepancy in self._get_valuation_discrepancies().items()
+            if float_compare(discrepancy, 0.0, precision_rounding=rounding) != 0
+        ]
+
+    @api.model
+    def _get_valuation_discrepancies(self):
+        """Return, per product valued in real time, how much its stock value
+        diverges from its accounting value."""
         to_date = self.env.context.get("at_date", False)
         # The value of the stock is the one of every allowed company, see
         # _get_stock_qty_and_value, so the accounting value is read from the
@@ -91,7 +139,7 @@ class ProductProduct(models.Model):
             {categ for accounts in accounts_by_company.values() for categ in accounts}
         )
         if not categ_ids:
-            return []
+            return {}
         # pylint: disable=E8103
         self.env.cr.execute(
             """
@@ -104,12 +152,11 @@ class ProductProduct(models.Model):
         )
         rows = self.env.cr.fetchall()
         if not rows:
-            return []
+            return {}
         categ_by_product = dict(rows)
         product_ids = list(categ_by_product)
         date_param = (to_date,) if to_date else ()
         aml_date_clause = "AND aml.date <= %s" if to_date else ""
-        precision_kwargs = {"precision_rounding": self.env.company.currency_id.rounding}
         stock_vals = {
             pid: value
             for pid, (_qty, value) in self.browse(product_ids)
@@ -144,16 +191,10 @@ class ProductProduct(models.Model):
                 acct_vals[product_id] = acct_vals.get(product_id, 0.0) + _convert(
                     balance, company
                 )
-        return [
-            pid
+        return {
+            pid: stock_vals.get(pid, 0.0) - acct_vals.get(pid, 0.0)
             for pid in product_ids
-            if float_compare(
-                stock_vals.get(pid, 0.0),
-                acct_vals.get(pid, 0.0),
-                **precision_kwargs,
-            )
-            != 0
-        ]
+        }
 
     def _get_valuation_aml_ids(self, product, to_date):
         # the journal items of every allowed company, each with the valuation
